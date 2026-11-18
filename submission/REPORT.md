@@ -1,6 +1,6 @@
 # Báo cáo Day 09 — <Lê Vĩnh Khải>, <2A202603322>
 
-> Các số liệu QC dưới đây được đối chiếu từ `submission/reports/`, calibration và manifest; kết quả training sẽ được bổ sung sau khi chạy Colab.
+> Các số liệu QC được đối chiếu từ submission/reports/, calibration và manifest. Kết quả training raw vs clean đã hoàn thành và được trình bày tại mục 5.
 
 ## 1. Kết luận trước
 **Pipeline kết luận Release / Hold / Rework? Bao nhiêu ảnh vào, bao nhiêu ảnh ra dataset?** Pipeline kết luận **HOLD**: intake nhận **202/224 ảnh** và loại 22; `clean_v1` có **202 ảnh** nhưng chỉ là **bản nháp**, chưa được Release. Sau khi mô phỏng người duyệt 80/80 ảnh theo ngân sách, không còn ERROR nhưng vẫn còn **38/202 ảnh chưa duyệt có WARN (18,81%)**, vượt ngưỡng Hold 10%; lệnh pipeline có mã thoát 10.

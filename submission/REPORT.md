@@ -57,13 +57,29 @@ Sau khi giảm xuống 12 và giữ `second_opinion.conf=0.60`, pipeline loại 
 **Ghi chú quan sát thủ công ban đầu (CP1, chưa phải kết quả pipeline):** Khi xem ảnh do `scripts/viz_labels.py` tạo và đối chiếu file nhãn hiện có, tôi ghi nhận ba **nghi ngờ** để kiểm tra lại bằng pipeline/người duyệt: `img_0001` có thể thiếu box cho 1 `person` ở giữa ảnh; `img_0007` có thể còn thiếu box `car` dù file nhãn đã có 6 box `car`; `img_0004` có file nhãn rỗng trong khi có xe con bị che/cắt ở mép phải, nên có thể thiếu box `car`. Đây chỉ là quan sát bằng mắt ở Bước 1, chưa đủ bằng chứng để xác nhận lỗi và không được dùng thay cho số liệu từ `submission/reports/`.
 
 ## 5. Train: raw vs clean (tùy chọn, chấm riêng)
-**Chưa chạy training trên Colab.** Tôi hoàn thiện và kiểm tra phần lõi trước; `submission/results/` chưa có kết quả raw/clean. Vì vậy báo cáo này chưa có mAP50, mAP50-95, precision, recall, kết quả seed hoặc kết luận clean tốt hơn raw.
 
-**Sau khi train cần trả lời:** dán bảng do `scripts/summarize_results.py` sinh; so sánh chênh mAP50 (clean − raw) với độ lệch chuẩn giữa ít nhất hai seed; chỉ kết luận tốt hơn nếu chênh lệch vượt nhiễu. Các giả thuyết cần kiểm gồm rò rỉ/trùng ảnh trong raw, cảnh báo nhãn còn lại trong bản clean đang Hold và độ bất định do test chỉ có 100 ảnh.
+**Thiết lập thí nghiệm:** Tôi sử dụng YOLO26n (`yolo26n.pt`) trên Google Colab với GPU T4, train 20 epoch cho mỗi lần chạy, gồm 2 seed (0 và 1) trên mỗi biến thể. Hai biến thể sử dụng cùng model khởi tạo, siêu tham số, tập validation (`gold_val`, 40 ảnh) và tập test (100 ảnh), chỉ khác dữ liệu training: **raw 224 ảnh** và **clean 202 ảnh**. Bộ clean hiện vẫn ở trạng thái **HOLD**, được sử dụng để thử nghiệm, chưa phải dataset Release.
+
+| Biến thể | Số ảnh train | Số seed | mAP50 (TB ± SD) | mAP50-95 (TB ± SD) | Precision (TB ± SD) | Recall (TB ± SD) |
+|---|---:|---:|---:|---:|---:|---:|
+| Raw | 224 | 2 | 0.726 ± 0.000 | 0.512 ± 0.004 | 0.764 ± 0.061 | 0.649 ± 0.028 |
+| Clean | 202 | 2 | 0.701 ± 0.025 | 0.487 ± 0.008 | 0.759 ± 0.003 | 0.625 ± 0.019 |
+
+**Phân tích kết quả:** Chênh lệch mAP50 (clean − raw) là **−0.025**, tức clean thấp hơn raw 2,5 điểm phần trăm trong thí nghiệm này. Raw cũng có trung bình mAP50-95, precision và recall cao hơn. Tuy nhiên, độ chênh mAP50 tương đương độ lệch chuẩn giữa hai seed của clean (0.025), trong khi raw có SD được làm tròn thành 0.000. Với chỉ 2 seed và 100 ảnh test, chưa đủ bằng chứng khẳng định chênh lệch này ổn định hoặc raw chắc chắn tốt hơn trong các lần chạy khác.
+
+**Giả thuyết giải thích và cách kiểm chứng:**
+
+1. **Số lượng dữ liệu train giảm:** Clean chỉ có 202 ảnh so với 224 ảnh raw, có thể làm giảm sự đa dạng dữ liệu học. Cách kiểm: thử train trên một tập raw được chọn với cùng số lượng ảnh, giữ nguyên tham số và seed, rồi so sánh.
+2. **Clean chưa được duyệt hoàn toàn:** Pipeline đang HOLD vì còn 38/202 ảnh có cảnh báo chưa được review. Các vấn đề như thiếu nhãn, nhầm lớp hoặc box lỏng vẫn có thể ảnh hưởng đến mô hình. Cách kiểm: hoàn tất human review, tạo bộ dữ liệu đạt Release và train lại với cùng điều kiện.
+3. **Nguy cơ rò rỉ dữ liệu trong raw:** Intake đã phát hiện 5 trường hợp `LEAK_TEST` trong lần chạy cuối. Việc raw chứa ảnh trùng kho đánh giá có thể làm sai lệch kết quả đo. Cách kiểm: kiểm tra sự trùng lặp và đánh giá trên một tập test độc lập; không sử dụng test để sửa nhãn, điều chỉnh ngưỡng hay lựa chọn mô hình.
+
+**Kết luận:** Thí nghiệm hiện tại chưa chứng minh clean cải thiện hiệu năng so với raw. Dù raw có điểm trung bình cao hơn, khác biệt vẫn cần được kiểm chứng với thêm seed và dữ liệu đánh giá độc lập. Việc AutoQC giúp phát hiện và giảm lỗi dữ liệu không đồng nghĩa với việc chắc chắn làm tăng mAP ở mọi thí nghiệm.
+
+**Bằng chứng:** [Bảng tổng hợp raw vs clean](results/comparison.md) · [Biểu đồ so sánh](results/comparison.png) · [Kết quả chi tiết theo seed](results/comparison.json).
 
 ## 6. Quyết định và ghi chú AI
 **Quyết định cuối:** **chưa Release; giữ HOLD**. Cần xử lý/duyệt tiếp các ảnh cảnh báo chưa được duyệt, ưu tiên 38 ảnh đang tính vào gate. Để xuống dưới 10%, số ảnh WARN chưa duyệt phải còn tối đa 20/202, tức cần giải quyết ít nhất 18/38 ảnh hiện tại (thận trọng hơn là duyệt hết), sau đó chạy lại pipeline, xác nhận 0 ERROR và gate Release. `clean_v1` hiện chỉ dùng như bản nháp/thí nghiệm; training Colab sẽ bổ sung sau và không thay thế điều kiện QC.
 
-**Ghi chú AI:** Lab coach cho phép dùng AI để tiết kiệm thời gian với điều kiện tự review. Tôi dùng Codex để hỗ trợ xây dựng bốn module theo docstring/config/test, phân tích log và soạn báo cáo; prompt chính luôn nêu interface, mapping lỗi, ngưỡng từ config, giới hạn file và lệnh test. Tôi kiểm lại bằng test riêng từng module, toàn bộ **79 test**, đối chiếu CSV/JSON sinh tự động và xem ảnh raw; mọi con số trong báo cáo phải truy được về artifact. **TODO cá nhân trước khi nộp:** bổ sung một trường hợp AI trả lời/code sai cụ thể và cách tôi phát hiện, vì hiện chưa ghi lại tình huống này nên không được phép bịa.
+**Ghi chú AI:** Tôi dùng Codex để hỗ trợ xây dựng, kiểm tra bốn module theo docstring/config/test, phân tích log và diễn đạt báo cáo và hướng dẫn làm bài. Tôi kiểm lại bằng test riêng từng module, toàn bộ **79 test**, đối chiếu CSV/JSON sinh tự động và xem ảnh raw; mọi con số trong báo cáo phải truy được về artifact. **TODO cá nhân trước khi nộp:** bổ sung một trường hợp AI trả lời/code sai cụ thể và cách tôi phát hiện, vì hiện chưa ghi lại tình huống này nên không được phép bịa.
 **Một lần AI đưa ra khuyến nghị chưa phù hợp:** Ban đầu, ChatGPT đề xuất chọn `duplicates.phash_dist = 16` vì F1 trên tập calibration đạt 0.91, cao hơn các ngưỡng khác. Tuy nhiên, khuyến nghị này chưa đánh giá đầy đủ nguy cơ false positive trên dữ liệu raw. Tôi yêu cầu Codex tạo contact sheet đối chiếu 7 cặp ảnh bị đánh dấu gần trùng và trực tiếp kiểm tra, phát hiện hai cặp khác nội dung tại pHash distance = 16 (`img_0011`–`img_0008` và `img_0177`–`img_0113`). Tôi điều chỉnh ngưỡng xuống 12, chạy lại pipeline và xác nhận số ảnh bị loại giảm từ 31 xuống 22. Bài học là không chấp nhận đề xuất AI chỉ dựa trên một chỉ số calibration mà phải kiểm chứng bằng dữ liệu thực tế.
 *(Thưởng +2, tùy chọn)* CVAT: chưa thực hiện; không khai báo điểm thưởng.

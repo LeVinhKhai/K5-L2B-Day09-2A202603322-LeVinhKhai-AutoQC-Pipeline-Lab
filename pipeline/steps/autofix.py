@@ -27,13 +27,169 @@ Bẫy cần nghĩ tới (có test cho từng cái)
 
 Gợi ý: `yaml.safe_load / safe_dump`.
 """
-from collections import defaultdict  # noqa: F401
+from collections import defaultdict
 
-import yaml  # noqa: F401
+import yaml
 
-from ..common import ERROR, parse_yolo_line  # noqa: F401
+from ..common import ERROR, parse_yolo_line
+
+
+DROP_LINE_CODES = {"BAD_FORMAT", "BAD_CLASS_ID", "BOX_ZERO", "DUP_BOX"}
+REMOVE_IMAGE_CODES = {"LEAK_TEST", "CORRUPT_IMAGE", "BAD_SIZE"}
+
+
+def _fix_log(image, line, action, before, after):
+    return {
+        "image": image,
+        "line": "" if line is None else line,
+        "action": action,
+        "before": before,
+        "after": after,
+    }
+
+
+def _line_ending(text):
+    if text.endswith("\r\n"):
+        return "\r\n"
+    if text.endswith("\n"):
+        return "\n"
+    if text.endswith("\r"):
+        return "\r"
+    return ""
+
+
+def _clip_yolo_line(text):
+    class_id, x, y, width, height = parse_yolo_line(text)
+    left = max(0.0, x - width / 2)
+    top = max(0.0, y - height / 2)
+    right = min(1.0, x + width / 2)
+    bottom = min(1.0, y + height / 2)
+
+    if right <= left or bottom <= top:
+        return None
+
+    clipped = (
+        (left + right) / 2,
+        (top + bottom) / 2,
+        right - left,
+        bottom - top,
+    )
+    values = " ".join(format(value, ".12g") for value in clipped)
+    return f"{class_id} {values}"
 
 
 def fix(ds, issues, cfg):
-    # TODO
-    raise NotImplementedError("autofix chưa làm")
+    error_issues = [issue for issue in issues if issue.severity == ERROR]
+    fixes = []
+
+    remove_stems = {
+        issue.image
+        for issue in error_issues
+        if issue.code.startswith("DUP_IMAGE_") or issue.code in REMOVE_IMAGE_CODES
+    }
+    removed = set()
+    for issue in error_issues:
+        stem = issue.image
+        if stem not in remove_stems or stem in removed:
+            continue
+
+        image_path = ds.image_path(stem)
+        label_path = ds.label_path(stem)
+        existing = [path.name for path in (image_path, label_path) if path is not None and path.exists()]
+        if not existing:
+            removed.add(stem)
+            continue
+
+        if image_path is not None:
+            image_path.unlink(missing_ok=True)
+        label_path.unlink(missing_ok=True)
+        removed.add(stem)
+        fixes.append(_fix_log(stem, None, "remove_image", ", ".join(existing), "đã xoá ảnh và nhãn"))
+
+    rename_requested = any(issue.code == "BAD_CLASS_NAME" for issue in error_issues)
+    if rename_requested:
+        try:
+            data = yaml.safe_load(ds.yaml_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        current_names = ds.yaml_names() if ds.yaml_path.exists() else {}
+        wanted_names = list(cfg["classes"])
+        current_ordered = [current_names[i] for i in sorted(current_names)]
+        if current_ordered != wanted_names or len(current_names) != len(wanted_names):
+            data["names"] = wanted_names
+            ds.yaml_path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            fixes.append(
+                _fix_log(
+                    "data.yaml",
+                    None,
+                    "rename_classes",
+                    str(current_ordered),
+                    str(wanted_names),
+                )
+            )
+
+    needs_label_seen = set()
+    for issue in error_issues:
+        stem = issue.image
+        if issue.code != "MISSING_LABEL_FILE" or stem in remove_stems or stem in needs_label_seen:
+            continue
+        if ds.image_path(stem) is not None and not ds.label_path(stem).exists():
+            fixes.append(_fix_log(stem, None, "needs_label", "(không có file)", "chuyển người gán"))
+            needs_label_seen.add(stem)
+
+    drops = defaultdict(set)
+    clips = defaultdict(set)
+    stem_order = []
+    planned_stems = set()
+    for issue in error_issues:
+        stem = issue.image
+        if stem in remove_stems or issue.line is None:
+            continue
+        if issue.code not in DROP_LINE_CODES and issue.code != "BOX_OUT_OF_IMAGE":
+            continue
+        if stem not in planned_stems:
+            stem_order.append(stem)
+            planned_stems.add(stem)
+        if issue.code in DROP_LINE_CODES:
+            drops[stem].add(issue.line)
+        else:
+            clips[stem].add(issue.line)
+
+    for stem in stem_order:
+        label_path = ds.label_path(stem)
+        if not label_path.exists():
+            continue
+
+        original_lines = label_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+        output_lines = []
+        stem_fixes = []
+
+        for line_no, original in enumerate(original_lines, 1):
+            before = original.rstrip("\r\n")
+            if line_no in drops[stem]:
+                stem_fixes.append(_fix_log(stem, line_no, "drop_line", before, ""))
+                continue
+
+            if line_no in clips[stem]:
+                try:
+                    after = _clip_yolo_line(before)
+                except (ValueError, OverflowError):
+                    output_lines.append(original)
+                    continue
+                if after is None:
+                    stem_fixes.append(_fix_log(stem, line_no, "drop_line", before, ""))
+                    continue
+                if after != before:
+                    output_lines.append(after + _line_ending(original))
+                    stem_fixes.append(_fix_log(stem, line_no, "clip_box", before, after))
+                    continue
+
+            output_lines.append(original)
+
+        if stem_fixes:
+            label_path.write_text("".join(output_lines), encoding="utf-8")
+            fixes.extend(stem_fixes)
+
+    return fixes
